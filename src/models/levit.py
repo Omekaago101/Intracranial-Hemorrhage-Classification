@@ -6,7 +6,8 @@ import torch.nn.functional as F
 
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-from fast_food import FastFoodLayer
+#from fast_food import FastFoodLayer
+from .fast_food import FastFoodLayer
 # helpers
 
 def exists(val):
@@ -148,14 +149,16 @@ class LeViT(nn.Module):
 
         assert all(map(lambda t: len(t) == stages, (dims, depths, layer_heads))), 'dimensions, depths, and heads must be a tuple that is less than the designated number of stages'
 
+        '''
         self.conv_embedding = nn.Sequential(
             nn.Conv2d(3, 32, 3, stride = 2, padding = 1),
             nn.Conv2d(32, 64, 3, stride = 2, padding = 1),
             nn.Conv2d(64, 128, 3, stride = 2, padding = 1),
             nn.Conv2d(128, dims[0], 3, stride = 2, padding = 1)
-        )
+        )'''
 
-        fmap_size = image_size // (2 ** 4)
+        #map_size = image_size // (2 ** 4)
+        fmap_size = image_size
         layers = []
 
         for ind, dim, depth, heads in zip(range(stages), dims, depths, layer_heads):
@@ -178,8 +181,8 @@ class LeViT(nn.Module):
         self.mlp_head = nn.Linear(dim, num_classes)
         self.fast_food = FastFoodLayer(dim)
 
-    def forward(self, img):
-        x = self.conv_embedding(img)
+    def forward(self, x):
+        #x = self.conv_embedding(img)
 
         x = self.backbone(x)        
 
@@ -194,19 +197,18 @@ class LeViT(nn.Module):
 
         return out
 
-'''
+
 if __name__ == '__main__':
     model = LeViT(
-        image_size=228,
+        image_size=14,
         num_classes = 6,
-        dim = (256,384,512),
+        dim = (1024,2048,4096),
         depth = 4,
         heads = (4,6,8),
         mlp_mult = 2, 
         dropout=0.1
     )
     
-    x = torch.rand((1,3,224,224))
+    x = torch.rand((1,1024,14,14))
     c = model(x)
     print(c.shape)
-'''
