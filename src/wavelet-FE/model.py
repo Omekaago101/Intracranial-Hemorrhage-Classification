@@ -5,6 +5,7 @@ from self_attention import SelfAttention
 from cross_attention import CrossAttention
 import collections
 import gc
+from models.levit import LeViT
 
 class WaveletLeTransform(nn.Module):
     """Some Information about WaveletLeTransform"""
@@ -12,19 +13,17 @@ class WaveletLeTransform(nn.Module):
         super(WaveletLeTransform, self).__init__()
         
         self.original_make_layer = self._make_layer(layer_channels[0],decompose_level[0])
-        print(self.original_make_layer)
         self.l2_make_layer = self._make_layer(layer_channels[1],decompose_level[1])
-        print(self.l2_make_layer)
         self.l3_make_layer = self._make_layer(layer_channels[2],decompose_level[2])
-        print(self.l3_make_layer)
         self.l4_make_layer = self._make_layer(layer_channels[3],decompose_level[3])
-        print(self.l4_make_layer)
         
         self.wavelet = WaveletTransform(wavelet_ch)
         self.self_attention = SelfAttention()
         self.conv1x1 = nn.Conv2d(in_channels=3072,out_channels=1024,kernel_size=1)
         self.bn = nn.BatchNorm2d(1024)
         self.relu = nn.ReLU()
+        
+        self
         
     def forward(self, x):
         # wavelet feature extraction
