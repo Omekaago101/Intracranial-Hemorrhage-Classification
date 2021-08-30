@@ -23,7 +23,15 @@ class WaveletLeTransform(nn.Module):
         self.bn = nn.BatchNorm2d(1024)
         self.relu = nn.ReLU()
         
-        self
+        self.levit = LeViT(
+            image_size=14,
+            num_classes = 6,
+            dim = (1024,2048,4096),
+            depth = 4,
+            heads = (4,6,8),
+            mlp_mult = 2, 
+            dropout=0.1
+        )
         
     def forward(self, x):
         # wavelet feature extraction
@@ -62,6 +70,8 @@ class WaveletLeTransform(nn.Module):
         
         # convolution operations to reduce feature map to 1024
         x = self.relu(self.bn(self.conv1x1(crx_attn)))
+        print(f'before LeViT: {x.shape}')
+        x = self.levit(x)
         return x
     
     def _make_layer(self,channels,level):
@@ -104,7 +114,7 @@ class WaveletLeTransform(nn.Module):
         return nn.Sequential(dict_layers)
     
 if __name__ == '__main__':
-    c = torch.rand((32,3,224,224))
+    c = torch.rand((8,3,224,224))
     print(c.dtype,c.device)
     c = c.type(torch.cuda.FloatTensor)
     wavelet_channels = [[12,32],48,192]

@@ -209,6 +209,6 @@ if __name__ == '__main__':
         dropout=0.1
     )
     
-    x = torch.rand((1,1024,14,14))
+    x = torch.rand((8,1024,14,14))
     c = model(x)
     print(c.shape)

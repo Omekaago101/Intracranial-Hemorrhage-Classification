@@ -1,4 +1,3 @@
-from datasets.dataset import IntracranialDataset
 import torch
 import torch.nn as nn
 from model import WaveletLeTransform
@@ -36,39 +35,8 @@ def parse_args():
         help="enable tta infer")
     parser.add_argument("-d", "--debug", action="store_true",
         help="enable debug mode for test")
-    parser.add_argument('-y', '--autocrop', action="store", 
-        dest="autocrop", help="Autocrop", default="T")
-    parser.add_argument('-s', '--seed', action="store",
-        dest="seed", help="model seed", default="1234")
-    parser.add_argument('-o', '--fold', action="store", 
-        dest="fold", help="Fold for split", default="0")
-    parser.add_argument('-p', '--nbags', action="store", 
-        dest="nbags", help="Number of bags for averaging", default="0")
-    parser.add_argument('-e', '--epochs', action="store", 
-        dest="epochs", help="epochs", default="5")
-    parser.add_argument('-j', '--start', action="store", 
-        dest="start", help="Start epochs", default="0")
-    parser.add_argument('-w', '--workpath', action="store", 
-        dest="workpath", help="Working path", default="densenetv1/weights")
-    parser.add_argument('-f', '--weightsname', action="store", 
-        dest="weightsname", help="Weights file name", default="pytorch_model.bin")
-    parser.add_argument('-g', '--logmsg', action="store", 
-        dest="logmsg", help="root directory", default="Recursion-pytorch")
-    parser.add_argument('-c', '--size', action="store", 
-        dest="size", help="model size", default="512")
-    parser.add_argument('-a', '--infer', action="store", 
-        dest="infer", help="root directory", default="TRN")
-    parser.add_argument('-z', '--wtsize', action="store", 
-        dest="wtsize", help="model size", default="999")
-    parser.add_argument('-m', '--hflip', action="store", 
-        dest="hflip", help="Augmentation - Embedding horizontal flip", default="F")
-    parser.add_argument('-d', '--transpose', action="store", 
-        dest="transpose", help="Augmentation - Embedding transpose", default="F")
-    parser.add_argument('-x', '--stage2', action="store", 
-        dest="stage2", help="Stage2 embeddings only", default="F")
-    parser.add_argument('-y', '--autocrop', action="store", 
-        dest="autocrop", help="Autocrop", default="T")
-    
+    parser.add_option('-y', '--autocrop', action="store", dest="autocrop", help="Autocrop", default="T")
+
     args = parser.parse_args()
     if args.valid:
         args.mode = "valid"
@@ -80,6 +48,84 @@ def parse_args():
 def build_model(cfg):
     model = WaveletLeTransform(cfg.MODEL.WL_CHNS,cfg.MODEL.CONV_CHNS,cfg.MODEL.LEVELS)
     return model
+
+def main(args, cfg):
+    # Set logger
+    logging = setup_logger(args.mode, cfg.DIRS.LOGS, 0, filename=f"{cfg.EXP}.txt")
+
+    # Declare variables
+    start_epoch = 0
+    best_metric = 10.
+
+    # Create model
+    model = build_model(cfg)
+    
+    # Define Loss and Optimizer
+    train_criterion = nn.BCEWithLogitsLoss(weight=torch.tensor(cfg.LOSS.WEIGHTS))
+    valid_criterion = WeightedBCEWithLogitsLoss(class_weights=torch.tensor(cfg.LOSS.WEIGHTS), reduction='none')
+    optimizer = make_optimizer(cfg, model)
+
+    # CUDA & Mixed Precision
+    if cfg.SYSTEM.CUDA:
+        model = model.cuda()
+        train_criterion = train_criterion.cuda()
+
+    if cfg.SYSTEM.FP16:
+        model, optimizer = amp.initialize(models=model, optimizers=optimizer,
+                                          opt_level=cfg.SYSTEM.OPT_L,
+                                          keep_batchnorm_fp32=(True if cfg.SYSTEM.OPT_L == "O2" else None))
+
+    # Load checkpoint
+    if args.load != "":
+        if os.path.isfile(args.load):
+            logging.info(f"=> loading checkpoint {args.load}")
+            ckpt = torch.load(args.load, "cpu")
+            model.load_state_dict(ckpt.pop('state_dict'))
+            if not args.finetune:
+                logging.info("resuming optimizer ...")
+                optimizer.load_state_dict(ckpt.pop('optimizer'))
+                start_epoch, best_metric = ckpt['epoch'], ckpt['best_metric']
+            logging.info(f"=> loaded checkpoint '{args.load}' (epoch {ckpt['epoch']}, best_metric: {ckpt['best_metric']})")
+        else:
+            logging.info(f"=> no checkpoint found at '{args.load}'")
+
+    if cfg.SYSTEM.MULTI_GPU:
+        model = nn.DataParallel(model)
+
+
+    DataSet = RSNAHemorrhageDS3d
+    train_ds = DataSet(cfg, mode="train")
+    #valid_ds = DataSet(cfg, mode="valid")
+    #test_ds = DataSet(cfg, mode="test")
+    if cfg.DEBUG:
+        train_ds = Subset(train_ds, np.random.choice(np.arange(len(train_ds)), 50))
+        #valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
+
+    train_loader = DataLoader(train_ds, cfg.TRAIN.BATCH_SIZE,
+                            pin_memory=False, shuffle=True,
+                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
+    '''
+    valid_loader = DataLoader(valid_ds, 1,
+                            pin_memory=False, shuffle=False,
+                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
+    test_loader = DataLoader(test_ds, 1, pin_memory=False, shuffle=False,
+                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
+    '''
+    scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
+    if args.mode == "train":
+        train_loop(logging.info, cfg, model, \
+                train_loader, train_criterion, valid_criterion, \
+                optimizer, scheduler, start_epoch, best_metric)
+    elif args.mode == "valid":
+        pass
+        #valid_model(logging.info, cfg, model, valid_loader, valid_criterion)
+    else:
+        pass
+        #submission = test_model(logging.info, cfg, model, test_loader)
+        #sub_fpath = os.path.join(cfg.DIRS.OUTPUTS, f"{cfg.EXP}.csv")
+        #submission.to_csv(sub_fpath, index=False)
+        #create_submission(submission, sub_fpath)
+    
 
 def train_loop(_print, cfg, model, train_loader, criterion, valid_criterion, optimizer, scheduler, start_epoch, best_metric, valid_loader=None):
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
@@ -204,81 +250,20 @@ def test_model(_print, cfg, model, test_loader):
                       "subarachnoid", "subdural", "epidural"]
     return submit
 
-def main(args, cfg):
-    # Set logger
-    logging = setup_logger(args.mode, cfg.DIRS.LOGS, 0, filename=f"{cfg.EXP}.txt")
+if __name__ == "__main__":
+    args = parse_args()
+    cfg = get_cfg()
 
-    # Declare variables
-    start_epoch = 0
-    best_metric = 10.
-
-    # Create model
-    model = build_model(cfg)
-    
-    # Define Loss and Optimizer
-    train_criterion = nn.BCEWithLogitsLoss(weight=torch.tensor(cfg.LOSS.WEIGHTS))
-    valid_criterion = WeightedBCEWithLogitsLoss(class_weights=torch.tensor(cfg.LOSS.WEIGHTS), reduction='none')
-    optimizer = make_optimizer(cfg, model)
-
-    # CUDA & Mixed Precision
-    if cfg.SYSTEM.CUDA:
-        model = model.cuda()
-        train_criterion = train_criterion.cuda()
-
-    if cfg.SYSTEM.FP16:
-        model, optimizer = amp.initialize(models=model, optimizers=optimizer,
-                                          opt_level=cfg.SYSTEM.OPT_L,
-                                          keep_batchnorm_fp32=(True if cfg.SYSTEM.OPT_L == "O2" else None))
-
-    # Load checkpoint
-    if args.load != "":
-        if os.path.isfile(args.load):
-            logging.info(f"=> loading checkpoint {args.load}")
-            ckpt = torch.load(args.load, "cpu")
-            model.load_state_dict(ckpt.pop('state_dict'))
-            if not args.finetune:
-                logging.info("resuming optimizer ...")
-                optimizer.load_state_dict(ckpt.pop('optimizer'))
-                start_epoch, best_metric = ckpt['epoch'], ckpt['best_metric']
-            logging.info(f"=> loaded checkpoint '{args.load}' (epoch {ckpt['epoch']}, best_metric: {ckpt['best_metric']})")
-        else:
-            logging.info(f"=> no checkpoint found at '{args.load}'")
-
-    if cfg.SYSTEM.MULTI_GPU:
-        model = nn.DataParallel(model)
-
-    train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TRAIN_CSV ))
-    test = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TEST_CSV))
-    
-    DataSet = RSNAHemorrhageDS3d
-    train_ds = DataSet(cfg, mode="train")
-    #valid_ds = DataSet(cfg, mode="valid")
-    #test_ds = DataSet(cfg, mode="test")
-    if cfg.DEBUG:
-        train_ds = Subset(train_ds, np.random.choice(np.arange(len(train_ds)), 50))
-        #valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
-
-    train_loader = DataLoader(train_ds, cfg.TRAIN.BATCH_SIZE,
-                            pin_memory=False, shuffle=True,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    '''
-    valid_loader = DataLoader(valid_ds, 1,
-                            pin_memory=False, shuffle=False,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    test_loader = DataLoader(test_ds, 1, pin_memory=False, shuffle=False,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    '''
-    scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
-    if args.mode == "train":
-        train_loop(logging.info, cfg, model, \
-                train_loader, train_criterion, valid_criterion, \
-                optimizer, scheduler, start_epoch, best_metric)
-    elif args.mode == "valid":
-        pass
-        #valid_model(logging.info, cfg, model, valid_loader, valid_criterion)
-    else:
-        pass
-        #submission = test_model(logging.info, cfg, model, test_loader)
-        #sub_fpath = os.path.join(cfg.DIRS.OUTPUTS, f"{cfg.EXP}.csv")
-        #submission.to_csv(sub_fpath, index=False)
-        #create_submission(submission, sub_fpath)
+    if args.config != "":
+        cfg.merge_from_file(args.config)
+    if args.debug:
+        opts = ["DEBUG", True, "TRAIN.EPOCHS", 2]
+        cfg.merge_from_list(opts)
+    cfg.freeze()
+    # make dirs
+    for _dir in ["WEIGHTS", "OUTPUTS", "LOGS"]:
+        if not os.path.isdir(cfg.DIRS[_dir]):
+            os.mkdir(cfg.DIRS[_dir])
+    # seed, run
+    setup_determinism(cfg.SYSTEM.SEED)
+    main(args, cfg)

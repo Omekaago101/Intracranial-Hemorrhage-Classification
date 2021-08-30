@@ -16,12 +16,12 @@ _C.SYSTEM.NUM_WORKERS = 1
 
 _C.DIRS = CN()
 _C.DIRS.DATA = "D:/Datasets/rsna/"
-_C.DIRS.TRAIN = "stage_2_train/"
-_C.DIRS.VALID = "stage_1_test_images/"
-_C.DIRS.TEST = "stage_2_test/"
-_C.DIRS.TRAIN_CSV = "stage_1_train_metadata.csv"
-_C.DIRS.VALID_CSV = "stage_1_test_metadata.csv"
-_C.DIRS.TEST_CSV = "stage_2_test_metadata.csv"
+_C.DIRS.TRAIN = "proc/train/"
+#_C.DIRS.VALID = "stage_1_test_images/"
+_C.DIRS.TEST = "proc/test/"
+_C.DIRS.TRAIN_CSV = "gz/train.csv.gz"
+#_C.DIRS.VALID_CSV = "stage_1_test_metadata.csv"
+_C.DIRS.TEST_CSV = "gz/test.csv.gz"
 _C.DIRS.WEIGHTS = "./weights/"
 _C.DIRS.OUTPUTS = "./outputs/"
 _C.DIRS.LOGS = "./logs/"
@@ -36,6 +36,8 @@ _C.DATA.IMG_SIZE = 224
 _C.DATA.INP_CHANNEL = 3
 _C.DATA.NUM_SLICES = 20
 
+_C.FOLD = CN()
+_C.FOLD.VALID = 0
 _C.TRAIN = CN()
 _C.TRAIN.EPOCHS = 40
 _C.TRAIN.BATCH_SIZE = 8
@@ -51,13 +53,18 @@ _C.OPT.WARMUP_EPOCHS = 4
 _C.OPT.BASE_LR = 1e-3
 _C.OPT.WEIGHT_DECAY = 1e-2
 _C.OPT.WEIGHT_DECAY_BIAS = 0.0
-_C.OPT.EPSILON = 1e-3
+_C.OPT.EPS = 1e-3
 
 _C.LOSS = CN()
 _C.LOSS.WEIGHTS = [2., 1., 1., 1., 1., 1.]
 
 
 _C.MODEL = CN()
+
+_C.MODEL.WL_CHNS = [[12,32],48,192] # channels for the wavelet feature extractions
+_C.MODEL.CONV_CHNS = [[64,128,256],[32,64,128,256],[48,64,128,256],[192,256]] # channels for the convolutional ops
+_C.MODEL.LEVELS = [1,2,3,4] # decomposition levels for wavelet feature extraction
+
 '''
 _C.MODEL.ENCODER = CN()
 #_C.MODEL.ENCODER.NAME = "se_resnext50_32x4d"
