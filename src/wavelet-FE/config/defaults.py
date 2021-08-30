@@ -3,7 +3,7 @@ from yacs.config import CfgNode as CN
 
 _C = CN()
 
-_C.EXP = "RSNA_Wavelet" # Experiment name
+_C.EXP = "RSNA_Wavelet_Transformer" # Experiment name
 _C.DEBUG = False
 
 _C.SYSTEM = CN()
@@ -19,9 +19,9 @@ _C.DIRS.DATA = "D:/Datasets/rsna/"
 _C.DIRS.TRAIN = "proc/train/"
 #_C.DIRS.VALID = "stage_1_test_images/"
 _C.DIRS.TEST = "proc/test/"
-_C.DIRS.TRAIN_CSV = "gz/train.csv.gz"
+_C.DIRS.TRAIN_CSV = "train_metadata.csv"
 #_C.DIRS.VALID_CSV = "stage_1_test_metadata.csv"
-_C.DIRS.TEST_CSV = "gz/test.csv.gz"
+_C.DIRS.TEST_CSV = "test_metadata.csv"
 _C.DIRS.WEIGHTS = "./weights/"
 _C.DIRS.OUTPUTS = "./outputs/"
 _C.DIRS.LOGS = "./logs/"
@@ -38,8 +38,9 @@ _C.DATA.NUM_SLICES = 20
 
 _C.FOLD = CN()
 _C.FOLD.VALID = 0
+
 _C.TRAIN = CN()
-_C.TRAIN.EPOCHS = 40
+_C.TRAIN.EPOCHS = 5
 _C.TRAIN.BATCH_SIZE = 8
 
 _C.INFER = CN()

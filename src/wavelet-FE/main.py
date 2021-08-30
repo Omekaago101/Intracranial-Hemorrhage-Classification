@@ -1,4 +1,3 @@
-from datasets.dataset import IntracranialDataset
 import torch
 import torch.nn as nn
 from model import WaveletLeTransform
@@ -40,8 +39,6 @@ def parse_args():
         dest="autocrop", help="Autocrop", default="T")
     parser.add_argument('-s', '--seed', action="store",
         dest="seed", help="model seed", default="1234")
-    parser.add_argument('-o', '--fold', action="store", 
-        dest="fold", help="Fold for split", default="0")
     parser.add_argument('-p', '--nbags', action="store", 
         dest="nbags", help="Number of bags for averaging", default="0")
     parser.add_argument('-e', '--epochs', action="store", 
@@ -60,14 +57,13 @@ def parse_args():
         dest="infer", help="root directory", default="TRN")
     parser.add_argument('-z', '--wtsize', action="store", 
         dest="wtsize", help="model size", default="999")
-    parser.add_argument('-m', '--hflip', action="store", 
+    parser.add_argument('-hf', '--hflip', action="store", 
         dest="hflip", help="Augmentation - Embedding horizontal flip", default="F")
-    parser.add_argument('-d', '--transpose', action="store", 
+    parser.add_argument('-tp', '--transpose', action="store", 
         dest="transpose", help="Augmentation - Embedding transpose", default="F")
-    parser.add_argument('-x', '--stage2', action="store", 
+    parser.add_argument('-xg', '--stage2', action="store", 
         dest="stage2", help="Stage2 embeddings only", default="F")
-    parser.add_argument('-y', '--autocrop', action="store", 
-        dest="autocrop", help="Autocrop", default="T")
+    
     
     args = parser.parse_args()
     if args.valid:
@@ -81,7 +77,7 @@ def build_model(cfg):
     model = WaveletLeTransform(cfg.MODEL.WL_CHNS,cfg.MODEL.CONV_CHNS,cfg.MODEL.LEVELS)
     return model
 
-def train_loop(_print, cfg, model, train_loader, criterion, valid_criterion, optimizer, scheduler, start_epoch, best_metric, valid_loader=None):
+def train_loop(_print, cfg, model, train_loader, criterion, valid_criterion, optimizer, scheduler, start_epoch, best_metric, valid_loader):
     for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
         _print(f"\nEpoch {epoch + 1}")
 
@@ -204,6 +200,21 @@ def test_model(_print, cfg, model, test_loader):
                       "subarachnoid", "subdural", "epidural"]
     return submit
 
+def create_submission(pred_df, sub_fpath):
+    imgid = pred_df["image"].values
+    output = pred_df.loc[:, pred_df.columns[1:]].values
+    data = [[iid]+[sub_o for sub_o in o] for iid, o in zip(imgid, output)]
+    table_data = []
+    for subdata in data:
+        table_data.append([subdata[0]+'_any', subdata[1]])
+        table_data.append([subdata[0]+'_intraparenchymal', subdata[2]])
+        table_data.append([subdata[0]+'_intraventricular', subdata[3]])
+        table_data.append([subdata[0]+'_subarachnoid', subdata[4]])
+        table_data.append([subdata[0]+'_subdural', subdata[5]])
+        table_data.append([subdata[0]+'_epidural', subdata[6]])
+    df = pd.DataFrame(data=table_data, columns=['ID','Label'])
+    df.to_csv(f'{sub_fpath}.csv', index=False)
+
 def main(args, cfg):
     # Set logger
     logging = setup_logger(args.mode, cfg.DIRS.LOGS, 0, filename=f"{cfg.EXP}.txt")
@@ -247,38 +258,56 @@ def main(args, cfg):
     if cfg.SYSTEM.MULTI_GPU:
         model = nn.DataParallel(model)
 
-    train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TRAIN_CSV ))
-    test = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TEST_CSV))
+    #train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TRAIN_CSV ))
+    #test = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TEST_CSV))
     
     DataSet = RSNAHemorrhageDS3d
     train_ds = DataSet(cfg, mode="train")
-    #valid_ds = DataSet(cfg, mode="valid")
-    #test_ds = DataSet(cfg, mode="test")
+    valid_ds = DataSet(cfg, mode="valid")
+    test_ds = DataSet(cfg, mode="test")
     if cfg.DEBUG:
         train_ds = Subset(train_ds, np.random.choice(np.arange(len(train_ds)), 50))
-        #valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
+        valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
 
     train_loader = DataLoader(train_ds, cfg.TRAIN.BATCH_SIZE,
-                            pin_memory=False, shuffle=True,
+                            pin_memory=True, shuffle=True,
                             drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    '''
+    
     valid_loader = DataLoader(valid_ds, 1,
-                            pin_memory=False, shuffle=False,
+                            pin_memory=True, shuffle=True,
                             drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    test_loader = DataLoader(test_ds, 1, pin_memory=False, shuffle=False,
+    test_loader = DataLoader(test_ds, 1, pin_memory=True, shuffle=False,
                             drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    '''
+    
     scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
     if args.mode == "train":
         train_loop(logging.info, cfg, model, \
                 train_loader, train_criterion, valid_criterion, \
-                optimizer, scheduler, start_epoch, best_metric)
+                optimizer, scheduler, start_epoch, best_metric,valid_loader)
     elif args.mode == "valid":
-        pass
-        #valid_model(logging.info, cfg, model, valid_loader, valid_criterion)
+        valid_model(logging.info, cfg, model, valid_loader, valid_criterion)
     else:
-        pass
-        #submission = test_model(logging.info, cfg, model, test_loader)
-        #sub_fpath = os.path.join(cfg.DIRS.OUTPUTS, f"{cfg.EXP}.csv")
-        #submission.to_csv(sub_fpath, index=False)
-        #create_submission(submission, sub_fpath)
+        submission = test_model(logging.info, cfg, model, test_loader)
+        sub_fpath = os.path.join(cfg.DIRS.OUTPUTS, f"{cfg.EXP}.csv")
+        submission.to_csv(sub_fpath, index=False)
+        create_submission(submission, sub_fpath)
+
+    
+if __name__ == "__main__":
+    args = parse_args()
+    print(args)
+    cfg = get_cfg()
+
+    if args.config != "":
+        cfg.merge_from_file(args.config)
+    if args.debug:
+        opts = ["DEBUG", True, "TRAIN.EPOCHS", 2]
+        cfg.merge_from_list(opts)
+    cfg.freeze()
+    # make dirs
+    for _dir in ["WEIGHTS", "OUTPUTS", "LOGS"]:
+        if not os.path.isdir(cfg.DIRS[_dir]):
+            os.mkdir(cfg.DIRS[_dir])
+    # seed, run
+    setup_determinism(cfg.SYSTEM.SEED)
+    main(args, cfg)

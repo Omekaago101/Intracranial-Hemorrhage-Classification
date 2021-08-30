@@ -20,12 +20,12 @@ from .sampler import adj_slices_sampler
 
 #logger = get_logger()
 class RSNAHemorrhageDS(Dataset):
-    def __init__(self, cfg, autocrop, mode="train"):
+    def __init__(self, cfg, mode="train"):
         super(RSNAHemorrhageDS, self).__init__()
         self.cfg = cfg
         self.CLASSES = self.cfg.CONST.LABELS
         self.mode = mode
-        self.AUTOCROP = autocrop
+        #self.AUTOCROP = autocrop
         fold = cfg.FOLD.VALID
         
         self.train_path = os.path.join(cfg.DIRS.DATA, cfg.DIRS.TRAIN)
@@ -89,21 +89,14 @@ class RSNAHemorrhageDS(Dataset):
             normalize={"mean": cfg.DATA.MEAN,
                        "std": cfg.DATA.STD})
 
-        self.train_studies = self.train_df["StudyInstanceUID"].unique()
-        self.valid_studies = self.valid_df["StudyInstanceUID"].unique()
+        #self.train_studies = self.train_df["StudyInstanceUID"].unique()
+        #self.valid_studies = self.valid_df["StudyInstanceUID"].unique()
         self.test_studies = self.test_df["StudyInstanceUID"].unique()
-
+        self.train_studies = self.test_df["StudyInstanceUID"].unique()
+        self.valid_studies = self.test_df["StudyInstanceUID"].unique()
+        
     def _load_img(self, file_path):
         img = cv2.imread(file_path, cv2.COLOR_BGR2RGB)
-        if self.AUTOCROP:
-            try:
-                try:
-                    img = self.autocrop(img,threshold=0,kernsel_size=img.shape[0]//15)
-                except:
-                    img = self.autocrop(img,threshold=0)
-            except:
-                1
-            img = self.autocrop(img)
         if self.mode == "train":
             img = self.train_aug(image=img)["image"]
 
