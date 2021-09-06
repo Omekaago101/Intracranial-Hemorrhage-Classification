@@ -5,8 +5,8 @@ from torch.optim.lr_scheduler import LambdaLR
 
 def make_lr_scheduler(cfg, optimizer, train_loader):
     num_epochs = cfg.TRAIN.EPOCHS
-    num_decay_epochs = cfg.OPT.DECAY_EPOCHS
-    decay_rate = cfg.OPT.DECAY_RATE
+    #num_decay_epochs = cfg.OPT.DECAY_EPOCHS
+    #decay_rate = cfg.OPT.DECAY_RATE
     num_warmup_epochs = cfg.OPT.WARMUP_EPOCHS
     grad_acc_steps = cfg.OPT.GD_STEPS
     schedule = cfg.OPT.SCHED
@@ -25,11 +25,12 @@ def make_lr_scheduler(cfg, optimizer, train_loader):
     elif schedule == "cosine_warmup":
         lr_scheduler = get_cosine_schedule_with_warmup(optimizer,
             num_warmup_steps, num_training_steps)
+    '''
     elif schedule == "decay_warmup":
         num_decay_steps = (num_decay_epochs * num_training_batches) // grad_acc_steps
         lr_scheduler = get_decay_schedule_with_warmup(optimizer, num_training_steps,
             num_warmup_steps, num_decay_steps, decay_rate)
-
+    '''
     return lr_scheduler
 
 

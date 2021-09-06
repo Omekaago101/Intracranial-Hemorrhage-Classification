@@ -12,16 +12,16 @@ _C.SYSTEM.FP16 = True
 _C.SYSTEM.OPT_L = "O2"
 _C.SYSTEM.CUDA = True
 _C.SYSTEM.MULTI_GPU = False
-_C.SYSTEM.NUM_WORKERS = 1
+_C.SYSTEM.NUM_WORKERS = 2
 
 _C.DIRS = CN()
 _C.DIRS.DATA = "D:/Datasets/rsna/"
 _C.DIRS.TRAIN = "proc/train/"
 #_C.DIRS.VALID = "stage_1_test_images/"
 _C.DIRS.TEST = "proc/test/"
-_C.DIRS.TRAIN_CSV = "train_metadata.csv"
+_C.DIRS.TRAIN_CSV = "gz/train.csv.gz"
 #_C.DIRS.VALID_CSV = "stage_1_test_metadata.csv"
-_C.DIRS.TEST_CSV = "test_metadata.csv"
+_C.DIRS.TEST_CSV = "gz/test.csv.gz"
 _C.DIRS.WEIGHTS = "./weights/"
 _C.DIRS.OUTPUTS = "./outputs/"
 _C.DIRS.LOGS = "./logs/"
@@ -40,7 +40,7 @@ _C.FOLD = CN()
 _C.FOLD.VALID = 0
 
 _C.TRAIN = CN()
-_C.TRAIN.EPOCHS = 5
+_C.TRAIN.EPOCHS = 20
 _C.TRAIN.BATCH_SIZE = 8
 
 _C.INFER = CN()
@@ -53,7 +53,7 @@ _C.OPT.GD_STEPS = 1
 _C.OPT.WARMUP_EPOCHS = 4
 _C.OPT.BASE_LR = 1e-3
 _C.OPT.WEIGHT_DECAY = 1e-2
-_C.OPT.WEIGHT_DECAY_BIAS = 0.0
+_C.OPT.WEIGHT_DECAY_BIAS = 0.0005
 _C.OPT.EPS = 1e-3
 
 _C.LOSS = CN()
@@ -83,7 +83,4 @@ _C.MODEL.NUM_CLASSES = 6
 
 _C.CONST = CN()
 _C.CONST.LABELS = [
-  "any",
-  "intraparenchymal", "intraventricular",
-  "subarachnoid", "subdural", "epidural"
-  ]
+  "any","epidural","intraparenchymal","intraventricular","subarachnoid","subdural"]

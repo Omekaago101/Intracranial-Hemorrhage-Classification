@@ -14,12 +14,28 @@ from datasets.rsna_dataset import RSNAHemorrhageDS3d
 from class_weighted_bce_loss import WeightedBCEWithLogitsLoss
 import numpy as np
 import pandas as pd
+from datasets.custom_dataset import IntracranialDataset
+import glob
+from einops import rearrange
+import gc
+from torch.utils.tensorboard import SummaryWriter
+import sys
+from torchvision.utils import make_grid
+from torchsampler.weighted_sampler import ImbalancedDatasetSampler as imb
+import pandas as pd
+from sklearn.utils import shuffle
+#from torchsampler.imbalanced_sampler import ImbalancedDatasetSampler as imb
 
+TORCH_MAJOR = int(torch.__version__.split('.')[0])
+TORCH_MINOR = int(torch.__version__.split('.')[1])
+print(f'{TORCH_MAJOR}')
+print(f'{TORCH_MINOR}')
+writer = SummaryWriter("runs/wavelet")
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="",
             help="config yaml path")
-    parser.add_argument("--load", type=str, default="",
+    parser.add_argument("--load", type=str, default="./weights/RSNA_Wavelet_Transformer.pth",
             help="path to model weight")
     parser.add_argument("--fold", type=int, default=0,
             help="fold for validation")
@@ -28,7 +44,7 @@ def parse_args():
     parser.add_argument("-m", "--mode", type=str, default="train",
         help="model running mode (train/valid/test)")
     parser.add_argument("--valid", action="store_true",
-        help="enable evaluation mode for validation")
+        help="enable evaluation mode for validation",)
     parser.add_argument("--test", action="store_true",
         help="enable evaluation mode for testset")
     parser.add_argument("--tta", action="store_true",
@@ -63,6 +79,7 @@ def parse_args():
         dest="transpose", help="Augmentation - Embedding transpose", default="F")
     parser.add_argument('-xg', '--stage2', action="store", 
         dest="stage2", help="Stage2 embeddings only", default="F")
+   
     
     
     args = parser.parse_args()
@@ -73,70 +90,153 @@ def parse_args():
 
     return args
 
+sys.exit()
 def build_model(cfg):
     model = WaveletLeTransform(cfg.MODEL.WL_CHNS,cfg.MODEL.CONV_CHNS,cfg.MODEL.LEVELS)
     return model
 
-def train_loop(_print, cfg, model, train_loader, criterion, valid_criterion, optimizer, scheduler, start_epoch, best_metric, valid_loader):
-    for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
-        _print(f"\nEpoch {epoch + 1}")
+def dataloader(cfg,df,autocrop,hflip,transpose,class_props,intra_class_props,mode='train'):
+    DataSet = IntracranialDataset
+    data_loader=""
+    if mode == 'train':
+        train_img_path = os.path.join(cfg.DIRS.DATA,cfg.DIRS.TRAIN)
+        train_ds = DataSet(cfg,df,train_img_path,labels=True,AUTOCROP=autocrop,HFLIP=hflip,TRANSPOSE=transpose, mode="train")
+        if cfg.DEBUG:
+            train_ds = Subset(train_ds, np.random.choice(np.arange(len(train_ds)), 50))
+        data_loader = DataLoader(train_ds, 4, sampler=imb(df,class_props,intra_class_props),
+                            pin_memory=True, shuffle=False, 
+                            drop_last=False, num_workers=1)
+    
+    elif mode == 'valid':
+        valid_img_path = os.path.join(cfg.DIRS.DATA,cfg.DIRS.TRAIN)
+        valid_ds = DataSet(cfg,df,valid_img_path,labels=True,AUTOCROP=autocrop,HFLIP=hflip,TRANSPOSE=transpose, mode="valid")
+        if cfg.DEBUG:
+            valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
+            data_loader = DataLoader(valid_ds, 4, sampler=imb(df,class_props,intra_class_props),
+                            pin_memory=True, shuffle=False,
+                            drop_last=False, num_workers=2)
+    #test_img_path = os.path.join(cfg.DIRS.DATA,cfg.DIRS.TEST)
+    #test_ds = DataSet(cfg,test,test_img_path,labels=True,AUTOCROP=autocrop,HFLIP=hflip,TRANSPOSE=transpose, mode="test")
 
-        losses = AverageMeter()
-        model.train()
-        tbar = tqdm(train_loader)
+    return data_loader
 
-        for i, (image, target) in enumerate(tbar):
-            image = image.cuda()
-            target = target.cuda()
-            bsize, seq_len, c, h, w = image.size()
-            image = image.view(bsize * seq_len, c, h, w)
-            target = target.view(-1, target.size(-1))
+def train_loop(_print, cfg, train_criterion, valid_criterion,\
+                class_props,intra_class_props,train,\
+                AUTOCROP,HFLIP,TRANSPOSE,start_epoch,best_metric):
+    # Create model
+    model = build_model(cfg)
+    optimizer = make_optimizer(cfg, model)
+    
+    # CUDA & Mixed Precision
+    if cfg.SYSTEM.CUDA:
+        model = model.cuda()
+        train_criterion = train_criterion.cuda()
 
-            # calculate loss
-            if cfg.DATA.CUTMIX:
-                mixed_image, target, mixed_target, lamb = cutmix_data(image, target,
-                    cfg.DATA.CM_ALPHA)
-            elif cfg.DATA.MIXUP:
-                mixed_image, target, mixed_target, lamb = mixup_data(image, target,
-                    cfg.DATA.CM_ALPHA)
-            output = model(mixed_image, seq_len)
-            loss = mixup_criterion(criterion, output,
-                target, mixed_target, lamb)
+    if cfg.SYSTEM.FP16:
+        model, optimizer = amp.initialize(models=model, optimizers=optimizer,
+                                          opt_level=cfg.SYSTEM.OPT_L,
+                                          keep_batchnorm_fp32=(True if cfg.SYSTEM.OPT_L == "O2" else None))
+    
+    folds = [0,1,2,3,4]
+    for i in range(len(folds)):
+        valdf = train[train['fold']==i].reset_index(drop=True)
+        trndf = train[train['fold']!=i].reset_index(drop=True)
+        
+        # shuffle the train df
+        trndf = shuffle(trndf,random_state=48)
+        
+        # split trndf into 6 parts
+        train_csvs = np.array_split(trndf,50)
+        # reset the index of each dataframe
+        train_csvs = [df.reset_index() for df in train_csvs]
+        valid_loader = dataloader(cfg,valdf,AUTOCROP,HFLIP,TRANSPOSE,class_props,intra_class_props,mode="valid")
+        
+        for k,train in enumerate(train_csvs):
+            train_loader = dataloader(cfg,train,AUTOCROP,HFLIP,TRANSPOSE,class_props,intra_class_props,mode="train")
+            
+            scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
+            
+            # Load checkpoint
+            try:
+                if args.load != "":
+                    if os.path.isfile(args.load):
+                        logging.info(f"=> loading checkpoint {args.load}")
+                        ckpt = torch.load(args.load, "cpu")
+                        model.load_state_dict(ckpt.pop('state_dict'))
+                        if not args.finetune:
+                            logging.info("resuming optimizer ...")
+                            optimizer.load_state_dict(ckpt.pop('optimizer'))
+                            start_epoch, best_metric = ckpt['epoch'], ckpt['best_metric']
+                        logging.info(f"=> loaded checkpoint '{args.load}' (epoch {ckpt['epoch']}, best_metric: {ckpt['best_metric']})")
+                    else:
+                        logging.info(f"=> no checkpoint found at '{args.load}'")
+            except FileNotFoundError:
+                pass
+            
+            for epoch in range(start_epoch, cfg.TRAIN.EPOCHS):
+                _print(f"\nEpoch {epoch + 1} for train_{k+1}")
 
-            # gradient accumulation
-            loss = loss / cfg.OPT.GD_STEPS
+                losses = AverageMeter()
+                model.train()
+                tbar = tqdm(train_loader)
 
-            if cfg.SYSTEM.FP16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+                torch.cuda.empty_cache() 
+                
+                for i, batch in enumerate(tbar):
+                    image = batch["image"].cuda()
+                    target = batch["labels"].cuda()
+                    image = rearrange(image,'b w h c->b c w h')
 
-            if (i + 1) % cfg.OPT.GD_STEPS == 0:
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
+                    # calculate loss
+                    if cfg.DATA.CUTMIX:
+                        mixed_image, target, mixed_target, lamb = cutmix_data(image, target,
+                            cfg.DATA.CM_ALPHA)
+                    elif cfg.DATA.MIXUP:
+                        mixed_image, target, mixed_target, lamb = mixup_data(image, target,
+                            cfg.DATA.CM_ALPHA)
+                    output = model(mixed_image)
+                    target,mixed_target = target.type(torch.float32),mixed_target.type(torch.float32)
+                    loss = mixup_criterion(train_criterion, output,target, mixed_target, lamb)
 
-            # record loss
-            losses.update(loss.item() * cfg.OPT.GD_STEPS, image.size(0))
-            tbar.set_description("Train loss: %.5f, learning rate: %.6f" % (losses.avg, optimizer.param_groups[-1]['lr']))
+                    del target,mixed_target,lamb,output
+                    gc.collect()
+                    torch.cuda.empty_cache() 
+                    # gradient accumulation
+                    loss = loss / cfg.OPT.GD_STEPS
 
-        _print("Train loss: %.5f, learning rate: %.6f" % (losses.avg, optimizer.param_groups[-1]['lr']))
+                    if cfg.SYSTEM.FP16:
+                        with amp.scale_loss(loss, optimizer) as scaled_loss:
+                            scaled_loss.backward()
+                    else:
+                        loss.backward()
 
-        if valid_loader is not None:
-            loss = valid_model(_print, cfg, model, valid_loader, valid_criterion)
-            is_best = loss < best_metric
-            best_metric = min(loss, best_metric)
+                    if (i + 1) % cfg.OPT.GD_STEPS == 0:
+                        optimizer.step()
+                        scheduler.step()
+                        optimizer.zero_grad()
 
-        save_checkpoint({
-            "epoch": epoch + 1,
-            "arch": cfg.EXP,
-            "state_dict": model.state_dict(),
-            "best_metric": best_metric,
-            "optimizer": optimizer.state_dict(),
-        }, is_best, root=cfg.DIRS.WEIGHTS, filename=f"{cfg.EXP}.pth")
+                    # record loss
+                    losses.update(loss.item() * cfg.OPT.GD_STEPS, image.size(0))
+                    tbar.set_description("Train loss: %.5f, learning rate: %.6f" % (losses.avg, optimizer.param_groups[-1]['lr']))
+                    writer.add_scalar("Train/Loss",loss.item(),epoch)
+                _print("Train loss: %.5f, learning rate: %.6f" % (losses.avg, optimizer.param_groups[-1]['lr']))
+
+                if valid_loader is not None:
+                    loss = valid_model(_print, cfg, model, valid_loader, valid_criterion)
+                    is_best = loss < best_metric
+                    best_metric = min(loss, best_metric)
+                    #writer.add_scalar("valid/Loss",loss.item(),epoch)
+                save_checkpoint({
+                    "epoch": epoch + 1,
+                    "arch": cfg.EXP,
+                    "state_dict": model.state_dict(),
+                    "best_metric": best_metric,
+                    "optimizer": optimizer.state_dict(),
+                }, is_best, root=cfg.DIRS.WEIGHTS, filename=f"{cfg.EXP}.pth")
+        
 
 def valid_model(_print, cfg, model, valid_loader, valid_criterion):
+    folds = [0,1,2,3,4]
     # switch to evaluate mode
     model.eval()
 
@@ -144,17 +244,16 @@ def valid_model(_print, cfg, model, valid_loader, valid_criterion):
     targets = []
     tbar = tqdm(valid_loader)
     with torch.no_grad():
-        for i, (image, target) in enumerate(tbar):
-            image = image.cuda()
-            target = target.cuda()
-            bsize, seq_len, c, h, w = image.size()
-            image = image.view(bsize * seq_len, c, h, w)
-            target = target.view(-1, target.size(-1))
-            output = model(image, seq_len)
+        for i, batch in enumerate(tbar):
+            image = batch['image'].cuda()
+            target = batch['labels'].cuda()
+            image = rearrange(image,'b w h c->b c w h')
+            output = model(image)
             preds.append(output.cpu())
             targets.append(target.cpu())
 
     preds, targets = torch.cat(preds, 0), torch.cat(targets, 0)
+    targets = targets.type(torch.float32)
     # record loss
     loss_tensor = valid_criterion(preds, targets)
     val_loss = loss_tensor.sum() / valid_criterion.class_weights.sum()
@@ -214,76 +313,58 @@ def create_submission(pred_df, sub_fpath):
         table_data.append([subdata[0]+'_epidural', subdata[6]])
     df = pd.DataFrame(data=table_data, columns=['ID','Label'])
     df.to_csv(f'{sub_fpath}.csv', index=False)
-
+    
 def main(args, cfg):
+    torch.cuda.empty_cache() 
     # Set logger
     logging = setup_logger(args.mode, cfg.DIRS.LOGS, 0, filename=f"{cfg.EXP}.txt")
-
-    # Declare variables
+    AUTOCROP = args.autocrop
+    HFLIP = 'T' if args.hflip=='T' else ''
+    TRANSPOSE = 'P' if args.transpose=='T' else ''
+     # Declare variables
     start_epoch = 0
     best_metric = 10.
-
-    # Create model
-    model = build_model(cfg)
     
     # Define Loss and Optimizer
     train_criterion = nn.BCEWithLogitsLoss(weight=torch.tensor(cfg.LOSS.WEIGHTS))
     valid_criterion = WeightedBCEWithLogitsLoss(class_weights=torch.tensor(cfg.LOSS.WEIGHTS), reduction='none')
-    optimizer = make_optimizer(cfg, model)
-
-    # CUDA & Mixed Precision
+    
+     # CUDA & Mixed Precision
     if cfg.SYSTEM.CUDA:
         model = model.cuda()
         train_criterion = train_criterion.cuda()
-
+    
     if cfg.SYSTEM.FP16:
         model, optimizer = amp.initialize(models=model, optimizers=optimizer,
-                                          opt_level=cfg.SYSTEM.OPT_L,
-                                          keep_batchnorm_fp32=(True if cfg.SYSTEM.OPT_L == "O2" else None))
-
-    # Load checkpoint
-    if args.load != "":
-        if os.path.isfile(args.load):
-            logging.info(f"=> loading checkpoint {args.load}")
-            ckpt = torch.load(args.load, "cpu")
-            model.load_state_dict(ckpt.pop('state_dict'))
-            if not args.finetune:
-                logging.info("resuming optimizer ...")
-                optimizer.load_state_dict(ckpt.pop('optimizer'))
-                start_epoch, best_metric = ckpt['epoch'], ckpt['best_metric']
-            logging.info(f"=> loaded checkpoint '{args.load}' (epoch {ckpt['epoch']}, best_metric: {ckpt['best_metric']})")
-        else:
-            logging.info(f"=> no checkpoint found at '{args.load}'")
-
-    if cfg.SYSTEM.MULTI_GPU:
-        model = nn.DataParallel(model)
-
-    #train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TRAIN_CSV ))
-    #test = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TEST_CSV))
+                                opt_level=cfg.SYSTEM.OPT_L,
+                                keep_batchnorm_fp32=(True if cfg.SYSTEM.OPT_L == "O2" else None))
     
-    DataSet = RSNAHemorrhageDS3d
-    train_ds = DataSet(cfg, mode="train")
-    valid_ds = DataSet(cfg, mode="valid")
-    test_ds = DataSet(cfg, mode="test")
-    if cfg.DEBUG:
-        train_ds = Subset(train_ds, np.random.choice(np.arange(len(train_ds)), 50))
-        valid_ds = Subset(valid_ds, np.random.choice(np.arange(len(valid_ds)), 20))
-
-    train_loader = DataLoader(train_ds, cfg.TRAIN.BATCH_SIZE,
-                            pin_memory=True, shuffle=True,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
+    train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TRAIN_CSV ))
+    test = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TEST_CSV))
     
-    valid_loader = DataLoader(valid_ds, 1,
-                            pin_memory=True, shuffle=True,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
-    test_loader = DataLoader(test_ds, 1, pin_memory=True, shuffle=False,
-                            drop_last=False, num_workers=cfg.SYSTEM.NUM_WORKERS)
+    train_png = glob.glob(os.path.join(cfg.DIRS.DATA,cfg.DIRS.TRAIN, '*.jpg'))
+    train_png = [os.path.basename(png)[:-4] for png in train_png]
     
-    scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
+    train_imgs = set(train.Image.tolist())
+    t_png = [p for p in train_png if p in train_imgs]
+    t_png = np.array(t_png)
+    train = train.set_index('Image').loc[t_png].reset_index()
+    
+    del train_png, t_png
+    gc.collect()
+    
+    class_props = [0.1,0.27,0.15,0.20,0.15,0.13]
+    intra_class_props = [[0.6,0.4],[0.85,0.15],[0.75,0.25],[0.75,0.25],[0.75,0.25],[0.85,0.15]]    
+    
+    
+    torch.cuda.empty_cache() 
+    #scheduler = make_lr_scheduler(cfg, optimizer, train_loader)
     if args.mode == "train":
-        train_loop(logging.info, cfg, model, \
-                train_loader, train_criterion, valid_criterion, \
-                optimizer, scheduler, start_epoch, best_metric,valid_loader)
+        train_loop(logging.info, cfg, \
+                train_criterion, valid_criterion, \
+                class_props,intra_class_props,train,\
+                AUTOCROP,HFLIP,TRANSPOSE,model,optimizer,start_epoch,best_metric)
+    '''
     elif args.mode == "valid":
         valid_model(logging.info, cfg, model, valid_loader, valid_criterion)
     else:
@@ -292,10 +373,11 @@ def main(args, cfg):
         submission.to_csv(sub_fpath, index=False)
         create_submission(submission, sub_fpath)
 
-    
+    '''
+
 if __name__ == "__main__":
     args = parse_args()
-    print(args)
+    #print(args)
     cfg = get_cfg()
 
     if args.config != "":

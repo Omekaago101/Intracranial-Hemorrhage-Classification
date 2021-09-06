@@ -41,28 +41,29 @@ class WaveletLeTransform(nn.Module):
         orig_input = self.self_attention(orig_input)
         # convolution operations on the original input. Output shape (Bx256x14x14)
         orig_input = self.original_make_layer(orig_input)
-        print(f'original->{orig_input.shape}')
+        #print(f'original->{orig_input.shape}')
         #cross self attention of first decomposition of wavelet feature extraction
         level2 = self.self_attention(level2)
         # convolution operations on level 2. Output shape (Bx256x14x14)
         level2 = self.l2_make_layer(level2)
-        print(f'level 2->{level2.shape}')
+        #print(f'level 2->{level2.shape}')
         #cross self attention of 2nd decomposition of wavelet feature extraction
         level3 = self.self_attention(level3)
         # convolution operations on level 3. Output shape (Bx256x14x14)
         level3 = self.l3_make_layer(level3)
-        print(f'level 3->{level3}')
+        #print(f'level 3->{level3}')
         
         #cross self attention of 3rd decomposition of wavelet feature extraction
         level4 = self.self_attention(level4)
         # convolution operations on level 4. Output shape (Bx256x14x14)
         level4 = self.l4_make_layer(level4)
-        print(f'level 4->{level4.shape}')
+        #print(f'level 4->{level4.shape}')
         
         tensor_list = [[orig_input,level2,level3,level4],[level2,level3,level4],[level3,level4]]
         
         del orig_input,level2,level3,level4
         gc.collect()
+        torch.cuda.empty_cache() 
         
         # cross attention for the individual cross self tensor attention feature maps
         cross_attn = CrossAttention(tensor_list)
@@ -70,8 +71,9 @@ class WaveletLeTransform(nn.Module):
         
         # convolution operations to reduce feature map to 1024
         x = self.relu(self.bn(self.conv1x1(crx_attn)))
-        print(f'before LeViT: {x.shape}')
+        #print(f'before LeViT: {x.shape}')
         x = self.levit(x)
+        #print(f'After LeViT: {x.shape}')
         return x
     
     def _make_layer(self,channels,level):

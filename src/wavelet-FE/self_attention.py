@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from einops import rearrange
-from nystrom_attention import Nystromformer
+#from nystrom_attention import Nystromformer
 import gc
 import collections
 import torch.nn.functional as F

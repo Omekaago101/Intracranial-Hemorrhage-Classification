@@ -32,12 +32,13 @@ class RSNAHemorrhageDS(Dataset):
         self.valid_path = os.path.join(cfg.DIRS.DATA, cfg.DIRS.TRAIN)
         self.test_path = os.path.join(cfg.DIRS.DATA, cfg.DIRS.TEST)
         
-        train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TRAIN_CSV ))
-        self.test_df = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.TEST_CSV))
+        train = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TRAIN_CSV ))
+        self.test_df = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TEST_CSV))
         
         self.valid_df = train[train['fold']==fold].reset_index(drop=True)
         self.train_df = train[train['fold']!=fold].reset_index(drop=True)
-
+        print(len(self.train_df))
+        print(len(self.valid_df))
         #self.train_df = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TRAIN_CSV))
         #self.valid_df = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.VALID_CSV))
         #self.test_df = pd.read_csv(os.path.join(cfg.DIRS.DATA, cfg.DIRS.TEST_CSV))
@@ -85,15 +86,13 @@ class RSNAHemorrhageDS(Dataset):
                     A.NoOp()
                 ])
             ])
-        self.totensor = pytorch.transforms.ToTensor(
-            normalize={"mean": cfg.DATA.MEAN,
-                       "std": cfg.DATA.STD})
+        self.totensor = pytorch.transforms.ToTensorV2()
 
         #self.train_studies = self.train_df["StudyInstanceUID"].unique()
         #self.valid_studies = self.valid_df["StudyInstanceUID"].unique()
         self.test_studies = self.test_df["StudyInstanceUID"].unique()
-        self.train_studies = self.test_df["StudyInstanceUID"].unique()
-        self.valid_studies = self.test_df["StudyInstanceUID"].unique()
+        self.train_studies = self.train_df["StudyInstanceUID"].unique()
+        self.valid_studies = self.valid_df["StudyInstanceUID"].unique()
         
     def _load_img(self, file_path):
         img = cv2.imread(file_path, cv2.COLOR_BGR2RGB)
@@ -175,13 +174,14 @@ class RSNAHemorrhageDS3d(RSNAHemorrhageDS):
         if not self.mode == "test":
             labels = study_df[self.CLASSES].values
 
+        '''
         if self.mode == "train":
             nslices = self.cfg.DATA.NUM_SLICES
             l = len(img_names)
             idx = adj_slices_sampler(nslices, l)
             img_names = img_names[idx]
             labels = labels[idx]
-
+        '''
         if self.mode == "train":
             data_path = self.train_path
         elif self.mode == "valid":
@@ -189,10 +189,14 @@ class RSNAHemorrhageDS3d(RSNAHemorrhageDS):
         elif self.mode == "test":
             data_path = self.test_path
 
+        '''
         img_paths = [os.path.join(data_path, img_name + ".jpg")
-                     for img_name in img_names]
-        imgs = [self._load_img(img_path) for img_path in img_paths]
-        imgs = torch.stack(imgs)
+                     for img_name in img_names]'''
+        img_path = os.path.join(data_path, img_names + ".jpg")
+        imgs = self._load_img(img_path)
+        
+        #imgs = [self._load_img(img_path) for img_path in img_paths]
+        #imgs = torch.stack(imgs)
 
         if self.mode == "train" or self.mode == "valid":
             return imgs, torch.from_numpy(labels).type('torch.FloatTensor')

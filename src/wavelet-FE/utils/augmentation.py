@@ -54,4 +54,10 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
     """
     Mixes loss from pairs of targets (y_a, y_b) based on lambda.
     """
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+    #print(f'Criterion: {criterion}\nPrediction: {pred.type}\ny_a: {y_a.dtype}\ny_b: {y_b.dtype}\nlam: {lam.dtype}')
+    a = criterion(pred, y_a)
+    b = criterion(pred, y_b)
+    c = (1.0 - lam)
+    d = lam * a
+    e = c * b
+    return lam * criterion(pred, y_a) + (1.0 - lam) * criterion(pred, y_b)
