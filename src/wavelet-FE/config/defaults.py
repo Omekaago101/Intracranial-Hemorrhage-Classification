@@ -40,7 +40,7 @@ _C.FOLD = CN()
 _C.FOLD.VALID = 0
 
 _C.TRAIN = CN()
-_C.TRAIN.EPOCHS = 20
+_C.TRAIN.EPOCHS = 5
 _C.TRAIN.BATCH_SIZE = 8
 
 _C.INFER = CN()
@@ -83,4 +83,7 @@ _C.MODEL.NUM_CLASSES = 6
 
 _C.CONST = CN()
 _C.CONST.LABELS = [
-  "any","epidural","intraparenchymal","intraventricular","subarachnoid","subdural"]
+  "any",
+  "intraparenchymal", "intraventricular",
+  "subarachnoid", "subdural", "epidural"
+  ]

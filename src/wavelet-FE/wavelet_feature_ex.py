@@ -58,16 +58,16 @@ class WaveletTransform(nn.Module):
         
          # convolution operations
         #orig_input = orig_input.detach().clone().requires_grad(True)
-        orig_input = orig_input.type(torch.float16)
+        orig_input = orig_input.type(torch.float32)
         orig_input = torch.tensor(orig_input,device="cuda",requires_grad=True)
         input_level1 = x_l1.detach().clone().requires_grad_(True)
-        input_level1 = input_level1.to(device="cuda",dtype=torch.float16)
+        input_level1 = input_level1.to(device="cuda",dtype=torch.float32)
         #input_level1 = input_level1.type()
         input_level2 = x_l2.detach().clone().requires_grad_(True)
-        input_level2 = input_level2.to(device="cuda",dtype=torch.float16)
+        input_level2 = input_level2.to(device="cuda",dtype=torch.float32)
         #input_level2 = input_level2.type(torch.float16)
         input_level3 = x_l3.detach().clone().requires_grad_(True)
-        input_level3 = input_level3.to(device="cuda",dtype=torch.float16)
+        input_level3 = input_level3.to(device="cuda",dtype=torch.float32)
         #input_level3.requires_grad(True)
         #input_level3 = input_level3.type(torch.float16).to(device="cuda")
         
