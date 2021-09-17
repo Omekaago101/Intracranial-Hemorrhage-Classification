@@ -101,7 +101,7 @@ class Attention(nn.Module):
         dots = self.apply_pos_bias(dots)
 
         attn = self.attend(dots)
-
+        v = v.type(torch.float32)
         out = einsum('b h i j, b h j d -> b h i d', attn, v)
         out = rearrange(out, 'b h (x y) d -> b (h d) x y', h = h, y = y)
         return self.to_out(out)
