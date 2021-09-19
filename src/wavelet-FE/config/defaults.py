@@ -3,7 +3,7 @@ from yacs.config import CfgNode as CN
 _C = CN()
 
 _C.EXP = "RSNA_Wavelet_Transformer"  # Experiment name
-_C.DEBUG = True
+_C.DEBUG = False
 
 _C.SYSTEM = CN()
 _C.SYSTEM.SEED = 0
@@ -39,7 +39,7 @@ _C.FOLD = CN()
 _C.FOLD.VALID = 0
 
 _C.TRAIN = CN()
-_C.TRAIN.EPOCHS = 5
+_C.TRAIN.EPOCHS = 10
 _C.TRAIN.BATCH_SIZE = 8
 
 _C.INFER = CN()

@@ -7,24 +7,59 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, roc_curve, log_loss, auc
 from scipy import interp
 from itertools import cycle
+from einops import rearrange
+import sys
+from .augmentation import mixup_data,cutmix_data
+#from torch.utils.tensorboard import SummaryWriter
+from colorama import Fore
+from .logging import AverageMeter
+#tbv = SummaryWriter("runs/valid")
 
+def get_num_correct(preds, labels):
+    return preds.argmax(dim=1).eq(labels.argmax(dim=1)).sum().item()
 
-def infer(model, loader, device, desc,_print,valid_criterion):
-    model.eval()
-    predictions, targets = [], []
+def test_time_augmentation(model, loaders, cfg, epoch, tb, desc,valid_criterion_2,weights,_print=None,valid_criterion=None):
+    #tta_predictions = []
+    targets = []
+    predictions =  []
+    tbar = tqdm(loaders,desc=desc)
     with torch.no_grad():
-        for image, target in tqdm(loader, desc=desc):
-            image = image.to(device)
-            y_hat = model(image)
-            predictions.append(y_hat.cpu())
-            targets.append(target)
-
-    predictions = torch.cat(predictions)
-    targets = torch.cat(targets)
+        total_correct=0
+        losses = AverageMeter()
+        for i, batch in enumerate(tbar):
+            image = batch['image'].cuda()
+            target = batch['labels']
+            if cfg.DATA.CUTMIX:
+                image, target, _,_ = cutmix_data(image, target, cfg.DATA.CM_ALPHA)
+            elif cfg.DATA.MIXUP:
+                image, target,_,_ = mixup_data(image, target, cfg.DATA.CM_ALPHA)
+            image = rearrange(image, 'b w h c->b c w h')
+            output = model(image)
+            target, output = target.type(torch.float32), output.type(torch.float32)
+            #vl = weighted_multi_label_logloss(valid_criterion_2,output.cpu(),target.cpu(),weights)
+            vl = valid_criterion(output.cpu(), target.cpu())
+            vl = vl / cfg.OPT.GD_STEPS
+            vl = vl.sum() / valid_criterion.class_weights.sum()
+            losses.update(vl.item() * cfg.OPT.GD_STEPS, image.size(0))
+            #vl = valid_criterion(output.cpu(),target.cpu())
+            #total_correct += get_num_correct(output.cpu(), target.cpu())
+            #accuracy = (total_correct/ len(loaders)*100)
+            
+            tbar.set_description(Fore.GREEN + f"Val for epoch:({epoch+1}) ==> Val Loss: {losses.avg:.5f}")
+            tb.add_scalar(f"Val_Data/Val_Loss_{epoch+1}", vl, i)
+            #tb.add_scalar(f"Val_Data/Val_Accuracy_{epoch+1}", accuracy, i)
+            tb.close()
+            predictions.append(output.cpu())
+            targets.append(target.cpu())
+            
+    tta_predictions = torch.cat(predictions, 0)
+    predictions = torch.cat(predictions,0)
+    targets = torch.cat(targets,0)
     #preds, targets = torch.cat(preds, 0), torch.cat(targets, 0)
     targets = targets.type(torch.float32)
     # record loss
     loss_tensor = valid_criterion(predictions, targets)
+    score = roc_auc_score(targets.numpy(), tta_predictions.numpy())
     val_loss = loss_tensor.sum() / valid_criterion.class_weights.sum()
     any_loss = loss_tensor[0]
     intraparenchymal_loss = loss_tensor[1]
@@ -33,27 +68,24 @@ def infer(model, loader, device, desc,_print,valid_criterion):
     subdural_loss = loss_tensor[4]
     epidural_loss = loss_tensor[5]
     _print(
-        "Val. loss: %.5f - any: %.3f - intraparenchymal: %.3f - intraventricular: %.3f - subarachnoid: %.3f - subdural: %.3f - epidural: %.3f" % (
+        Fore.LIGHTMAGENTA_EX+"Val. loss: %.5f - any: %.3f - intraparenchymal: %.3f - intraventricular: %.3f - subarachnoid: %.3f - subdural: %.3f - epidural: %.3f" % (
             val_loss, any_loss,
             intraparenchymal_loss, intraventricular_loss,
             subarachnoid_loss, subdural_loss, epidural_loss))
     # record AUC
     auc = roc_auc_score(targets[:, 1:].numpy(), predictions[:, 1:].numpy(), average=None)
     _print(
-        "Val. AUC - intraparenchymal: %.3f - intraventricular: %.3f - subarachnoid: %.3f - subdural: %.3f - epidural: %.3f" % (
+        Fore.LIGHTMAGENTA_EX+"Val. AUC - intraparenchymal: %.3f - intraventricular: %.3f - subarachnoid: %.3f - subdural: %.3f - epidural: %.3f" % (
             auc[0], auc[1], auc[2], auc[3], auc[4]))
-    return predictions, targets
+    return score,val_loss
 
-
-def test_time_augmentation(model, loaders, device, desc,_print=None,valid_criterion=None):
-    tta_predictions = []
-    for i, loader in enumerate(loaders):
-        predictions, targets = infer(model, loader, device, f"{desc} TTA {i}",_print,valid_criterion)
-        tta_predictions.append(torch.unsqueeze(predictions, -1))
-
-    tta_predictions = torch.cat(tta_predictions, -1)
-    return torch.mean(tta_predictions, dim=-1), targets
-
+def weighted_multi_label_logloss(criterion, prediction, target, weights):
+    assert target.size() == prediction.size()
+    assert weights.shape[0] == target.size(1)
+    loss = 0
+    for i in range(target.size(1)):
+        loss += weights[i] * criterion(prediction[:, i], target[:, i])
+    return loss
 
 class EarlyStopping:
     """
